@@ -1,7 +1,8 @@
-from __future__ import absolute_import
+
 
 import warnings
 from .reader import Reader
+import collections
 
 
 class LegacyReader(object):
@@ -30,7 +31,7 @@ class LegacyReader(object):
 
         if args:
             keys = old_kwargs[:len(args)]
-            old_params = dict(zip(keys, args))
+            old_params = dict(list(zip(keys, args)))
 
         old_params.update(kwargs)
 
@@ -43,11 +44,11 @@ class LegacyReader(object):
         del old_params['channel']
 
         assert isinstance(all_tasks, dict)
-        for key, method in all_tasks.items():
-            assert callable(method), 'key %s must have a callable value' % key
+        for key, method in list(all_tasks.items()):
+            assert isinstance(method, collections.Callable), 'key %s must have a callable value' % key
 
         self.readers = []
-        for task, method in all_tasks.items():
+        for task, method in list(all_tasks.items()):
             if len(all_tasks) > 1:
                 task_channel = channel + '.' + task
             else:

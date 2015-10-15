@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from __future__ import absolute_import
+
 
 import logging
 import time
@@ -85,7 +85,7 @@ class Writer(Client):
         super(Writer, self).__init__(**kwargs)
 
         if not isinstance(nsqd_tcp_addresses, (list, set, tuple)):
-            assert isinstance(nsqd_tcp_addresses, (str, unicode))
+            assert isinstance(nsqd_tcp_addresses, str)
             nsqd_tcp_addresses = [nsqd_tcp_addresses]
         assert nsqd_tcp_addresses
 
@@ -112,7 +112,7 @@ class Writer(Client):
         self._pub('pub', topic, msg, callback)
 
     def mpub(self, topic, msg, callback=None):
-        if isinstance(msg, (str, unicode)):
+        if isinstance(msg, str):
             msg = [msg]
         assert isinstance(msg, (list, set, tuple))
 
@@ -127,7 +127,7 @@ class Writer(Client):
             callback(None, protocol.SendError('no connections'))
             return
 
-        conn = random.choice(self.conns.values())
+        conn = random.choice(list(self.conns.values()))
         conn.callback_queue.append(callback)
         cmd = getattr(protocol, command)
         try:
@@ -153,7 +153,7 @@ class Writer(Client):
             self.connect_to_nsqd(host, int(port))
 
     def connect_to_nsqd(self, host, port):
-        assert isinstance(host, (str, unicode))
+        assert isinstance(host, str)
         assert isinstance(port, int)
 
         conn = async.AsyncConn(host, port, **self.conn_kwargs)

@@ -1,4 +1,4 @@
-from __future__ import absolute_import
+
 
 import socket
 import struct
@@ -13,7 +13,7 @@ class SyncConn(object):
         self.s = None
 
     def connect(self, host, port):
-        assert isinstance(host, (str, unicode))
+        assert isinstance(host, str)
         assert isinstance(port, int)
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.settimeout(self.timeout)

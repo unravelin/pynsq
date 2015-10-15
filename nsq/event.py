@@ -1,6 +1,7 @@
-from __future__ import absolute_import
+
 
 from collections import defaultdict
+import collections
 
 
 class DuplicateListenerError(Exception):
@@ -52,7 +53,7 @@ class EventedMixin(object):
         :param callback: the callback to execute when the event is triggered
         :type callback: callable
         """
-        assert callable(callback), 'callback is not callable'
+        assert isinstance(callback, collections.Callable), 'callback is not callable'
         if callback in self.__listeners[name]:
             raise DuplicateListenerError
         self.__listeners[name].append(callback)

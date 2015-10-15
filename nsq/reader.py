@@ -1,14 +1,15 @@
-from __future__ import absolute_import
+
 
 import logging
 import time
 import functools
-import urllib
+import urllib.request, urllib.parse, urllib.error
 import random
-import urlparse
+import urllib.parse
 import cgi
 import warnings
 import inspect
+import collections
 
 try:
     import simplejson as json
@@ -152,11 +153,11 @@ class Reader(Client):
             **kwargs):
         super(Reader, self).__init__(**kwargs)
 
-        assert isinstance(topic, (str, unicode)) and len(topic) > 0
-        assert isinstance(channel, (str, unicode)) and len(channel) > 0
+        assert isinstance(topic, str) and len(topic) > 0
+        assert isinstance(channel, str) and len(channel) > 0
         assert isinstance(max_in_flight, int) and max_in_flight > 0
         assert isinstance(max_backoff_duration, (int, float)) and max_backoff_duration > 0
-        assert isinstance(name, (str, unicode, None.__class__))
+        assert isinstance(name, (str, None.__class__))
         assert isinstance(lookupd_poll_interval, int)
         assert isinstance(lookupd_poll_jitter, float)
         assert isinstance(lookupd_connect_timeout, int)
@@ -166,14 +167,14 @@ class Reader(Client):
 
         if nsqd_tcp_addresses:
             if not isinstance(nsqd_tcp_addresses, (list, set, tuple)):
-                assert isinstance(nsqd_tcp_addresses, (str, unicode))
+                assert isinstance(nsqd_tcp_addresses, str)
                 nsqd_tcp_addresses = [nsqd_tcp_addresses]
         else:
             nsqd_tcp_addresses = []
 
         if lookupd_http_addresses:
             if not isinstance(lookupd_http_addresses, (list, set, tuple)):
-                assert isinstance(lookupd_http_addresses, (str, unicode))
+                assert isinstance(lookupd_http_addresses, str)
                 lookupd_http_addresses = [lookupd_http_addresses]
             random.shuffle(lookupd_http_addresses)
         else:
@@ -259,7 +260,7 @@ class Reader(Client):
         """
         Closes all connections stops all periodic callbacks
         """
-        for conn in self.conns.values():
+        for conn in list(self.conns.values()):
             conn.close()
 
         self.redist_periodic.stop()
@@ -272,7 +273,7 @@ class Reader(Client):
 
         :param message_handler: a callable that takes a single argument
         """
-        assert callable(message_handler), 'message_handler must be callable'
+        assert isinstance(message_handler, collections.Callable), 'message_handler must be callable'
         self.message_handler = message_handler
 
     def _connection_max_in_flight(self):
@@ -299,7 +300,7 @@ class Reader(Client):
             reader.set_message_handler(functools.partial(message_handler, reader=reader))
             nsq.run()
         """
-        for conn in self.conns.itervalues():
+        for conn in self.conns.values():
             if conn.in_flight > 0 and conn.in_flight >= (conn.last_rdy * 0.85):
                 return True
         return False
@@ -318,7 +319,7 @@ class Reader(Client):
             # if all connections aren't getting RDY
             # occsionally randomize which connection gets RDY
             self.random_rdy_ts = time.time()
-            conns_with_no_rdy = [c for c in self.conns.itervalues() if not c.rdy]
+            conns_with_no_rdy = [c for c in self.conns.values() if not c.rdy]
             if conns_with_no_rdy:
                 rdy_conn = random.choice(conns_with_no_rdy)
                 if rdy_conn is not conn:
@@ -370,7 +371,7 @@ class Reader(Client):
         if not self.conns or self.max_in_flight == 0:
             return
 
-        conn = random.choice(self.conns.values())
+        conn = random.choice(list(self.conns.values()))
         logger.info('[%s:%s] testing backoff state with RDY 1', conn.id, self.name)
         self._send_rdy(conn, 1)
 
@@ -390,7 +391,7 @@ class Reader(Client):
         rdy = self._connection_max_in_flight()
         logger.info('[%s] backoff complete, resuming normal operation (%d connections)',
                     self.name, len(self.conns))
-        for c in self.conns.values():
+        for c in list(self.conns.values()):
             self._send_rdy(c, rdy)
 
     def _enter_continue_or_exit_backoff(self):
@@ -422,7 +423,7 @@ class Reader(Client):
 
         logger.info('[%s] backing off for %0.2f seconds (%d connections)',
                     self.name, backoff_interval, len(self.conns))
-        for c in self.conns.values():
+        for c in list(self.conns.values()):
             self._send_rdy(c, 0)
 
         self.backoff_timeout = self.io_loop.add_timeout(time.time() + backoff_interval,
@@ -464,7 +465,7 @@ class Reader(Client):
         :param host: the address to connect to
         :param port: the port to connect to
         """
-        assert isinstance(host, (str, unicode))
+        assert isinstance(host, str)
         assert isinstance(port, int)
 
         conn = async.AsyncConn(host, port, **self.conn_kwargs)
@@ -564,15 +565,15 @@ class Reader(Client):
         if '://' not in endpoint:
             endpoint = 'http://' + endpoint
 
-        scheme, netloc, path, query, fragment = urlparse.urlsplit(endpoint)
+        scheme, netloc, path, query, fragment = urllib.parse.urlsplit(endpoint)
 
         if not path or path == "/":
             path = "/lookup"
 
         params = cgi.parse_qs(query)
         params['topic'] = self.topic
-        query = urllib.urlencode(_utf8_params(params), doseq=1)
-        lookupd_url = urlparse.urlunsplit((scheme, netloc, path, query, fragment))
+        query = urllib.parse.urlencode(_utf8_params(params), doseq=1)
+        lookupd_url = urllib.parse.urlunsplit((scheme, netloc, path, query, fragment))
 
         req = tornado.httpclient.HTTPRequest(
             lookupd_url, method='GET',
@@ -612,7 +613,7 @@ class Reader(Client):
         
         if max_in_flight == 0:
             # set RDY 0 to all connections
-            for conn in self.conns.itervalues():
+            for conn in self.conns.values():
                 if conn.rdy > 0:
                     logger.debug('[%s:%s] rdy: %d -> 0', conn.id, self.name, conn.rdy)
                     self._send_rdy(conn, 0)
@@ -655,7 +656,7 @@ class Reader(Client):
 
             # first set RDY 0 to all connections that have not received a message within
             # a configurable timeframe (low_rdy_idle_timeout).
-            for conn_id, conn in self.conns.iteritems():
+            for conn_id, conn in self.conns.items():
                 last_message_duration = time.time() - conn.last_msg_timestamp
                 logger.debug('[%s:%s] rdy: %d (last message received %.02fs)',
                              conn.id, self.name, conn.rdy, last_message_duration)
@@ -675,7 +676,7 @@ class Reader(Client):
             # We also don't attempt to avoid the connections who previously might have had RDY 1
             # because it would be overly complicated and not actually worth it (ie. given enough
             # redistribution rounds it doesn't matter).
-            possible_conns = self.conns.values()
+            possible_conns = list(self.conns.values())
             while possible_conns and max_in_flight:
                 max_in_flight -= 1
                 conn = possible_conns.pop(random.randrange(len(possible_conns)))
@@ -722,7 +723,7 @@ class Reader(Client):
                         return int(x)
                     except:
                         return x
-                return map(cast, v.replace('-','.').split('.'))
+                return list(map(cast, v.replace('-','.').split('.')))
 
             if self.disabled.__code__ != Reader.disabled.__code__ and semver(data['version']) >= semver('0.3'):
                 logging.warning('disabled() deprecated and incompatible with nsqd >= 0.3. ' + 
@@ -755,10 +756,10 @@ def _utf8_params(params):
     """encode a dictionary of URL parameters (including iterables) as utf-8"""
     assert isinstance(params, dict)
     encoded_params = []
-    for k, v in params.items():
+    for k, v in list(params.items()):
         if v is None:
             continue
-        if isinstance(v, (int, long, float)):
+        if isinstance(v, (int, float)):
             v = str(v)
         if isinstance(v, (list, tuple)):
             v = [_utf8(x) for x in v]
@@ -770,7 +771,7 @@ def _utf8_params(params):
 
 def _utf8(s):
     """encode a unicode string as utf-8"""
-    if isinstance(s, unicode):
+    if isinstance(s, str):
         return s.encode("utf-8")
     assert isinstance(s, str), "_utf8 expected a str, not %r" % type(s)
     return s
