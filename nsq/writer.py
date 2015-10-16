@@ -8,198 +8,222 @@ import random
 import inspect
 
 from .client import Client
-from nsq import protocol
-from . import async
+from nsq import async, compat, protocol
 
 logger = logging.getLogger(__name__)
 
 
 class Writer(Client):
-    """
-    A high-level producer class built on top of the `Tornado IOLoop <http://tornadoweb.org>`_
-    supporting async publishing (``PUB`` & ``MPUB``) of messages to ``nsqd`` over the TCP protocol.
+	"""
+	A high-level producer class built on top of the `Tornado IOLoop <http://tornadoweb.org>`_
+	supporting async publishing (``PUB`` & ``MPUB``) of messages to ``nsqd`` over the TCP protocol.
 
-    Example publishing a message repeatedly using a Tornado IOLoop periodic callback::
+	Example publishing a message repeatedly using a Tornado IOLoop periodic callback::
 
-        import nsq
-        import tornado.ioloop
-        import time
+		import nsq
+		import tornado.ioloop
+		import time
 
-        def pub_message():
-            writer.pub('test', time.strftime('%H:%M:%S'), finish_pub)
+		def pub_message():
+			writer.pub('test', time.strftime('%H:%M:%S'), finish_pub)
 
-        def finish_pub(conn, data):
-            print data
+		def finish_pub(conn, data):
+			print(data)
 
-        writer = nsq.Writer(['127.0.0.1:4150'])
-        tornado.ioloop.PeriodicCallback(pub_message, 1000).start()
-        nsq.run()
+		writer = nsq.Writer(['127.0.0.1:4150'])
+		tornado.ioloop.PeriodicCallback(pub_message, 1000).start()
+		nsq.run()
 
-    Example publshing a message from a Tornado HTTP request handler::
+	Example publshing a message from a Tornado HTTP request handler::
 
-        import functools
-        import tornado.httpserver
-        import tornado.ioloop
-        import tornado.options
-        import tornado.web
-        from nsq import Writer, Error
-        from tornado.options import define, options
+		import functools
+		import tornado.httpserver
+		import tornado.ioloop
+		import tornado.options
+		import tornado.web
+		from nsq import Writer, Error
+		from tornado.options import define, options
 
-        class MainHandler(tornado.web.RequestHandler):
-            @property
-            def nsq(self):
-                return self.application.nsq
+		class MainHandler(tornado.web.RequestHandler):
+			@property
+			def nsq(self):
+				return self.application.nsq
 
-            def get(self):
-                topic = 'log'
-                msg = 'Hello world'
-                msg_cn = 'Hello 世界'
+			def get(self):
+				topic = 'log'
+				msg = 'Hello world'
+				msg_cn = 'Hello 世界'
 
-                self.nsq.pub(topic, msg) # pub
-                self.nsq.mpub(topic, [msg, msg_cn]) # mpub
+				self.nsq.pub(topic, msg) # pub
+				self.nsq.mpub(topic, [msg, msg_cn]) # mpub
 
-                # customize callback
-                callback = functools.partial(self.finish_pub, topic=topic, msg=msg)
-                self.nsq.pub(topic, msg, callback=callback)
+				# customize callback
+				callback = functools.partial(self.finish_pub, topic=topic, msg=msg)
+				self.nsq.pub(topic, msg, callback=callback)
 
-                self.write(msg)
+				self.write(msg)
 
-            def finish_pub(self, conn, data, topic, msg):
-                if isinstance(data, Error):
-                    # try to re-pub message again if pub failed
-                    self.nsq.pub(topic, msg)
+			def finish_pub(self, conn, data, topic, msg):
+				if isinstance(data, Error):
+					# try to re-pub message again if pub failed
+					self.nsq.pub(topic, msg)
 
-        class Application(tornado.web.Application):
-            def __init__(self, handlers, **settings):
-                self.nsq = Writer(['127.0.0.1:4150'])
-                super(Application, self).__init__(handlers, **settings)
+		class Application(tornado.web.Application):
+			def __init__(self, handlers, **settings):
+				self.nsq = Writer(['127.0.0.1:4150'])
+				super(Application, self).__init__(handlers, **settings)
 
-    :param nsqd_tcp_addresses: a sequence with elements of the form 'address:port' corresponding
-        to the ``nsqd`` instances this writer should publish to
+	:param nsqd_tcp_addresses: a sequence with elements of the form 'address:port' corresponding
+		to the ``nsqd`` instances this writer should publish to
 
-    :param name: a string that is used for logging messages (defaults to first nsqd address)
+	:param name: a string that is used for logging messages (defaults to first nsqd address)
 
-    :param \*\*kwargs: passed to :class:`nsq.AsyncConn` initialization
-    """
-    def __init__(self, nsqd_tcp_addresses, reconnect_interval=15.0, name=None, **kwargs):
-        super(Writer, self).__init__(**kwargs)
+	:param \*\*kwargs: passed to :class:`nsq.AsyncConn` initialization
+	"""
+	def __init__(self, nsqd_tcp_addresses, reconnect_interval=15.0, name=None, **kwargs):
+		super(Writer, self).__init__(**kwargs)
 
-        if not isinstance(nsqd_tcp_addresses, (list, set, tuple)):
-            assert isinstance(nsqd_tcp_addresses, str)
-            nsqd_tcp_addresses = [nsqd_tcp_addresses]
-        assert nsqd_tcp_addresses
+		if not isinstance(nsqd_tcp_addresses, (list, set, tuple)):
+			assert isinstance(nsqd_tcp_addresses, compat.string_like)
+			nsqd_tcp_addresses = [nsqd_tcp_addresses]
+		assert nsqd_tcp_addresses
 
-        self.name = name or nsqd_tcp_addresses[0]
-        self.nsqd_tcp_addresses = nsqd_tcp_addresses
-        self.conns = {}
+		self.name = name or nsqd_tcp_addresses[0]
+		self.nsqd_tcp_addresses = nsqd_tcp_addresses
+		self.conns = {}
 
-        # Verify keyword arguments
-        valid_args = inspect.getargspec(async.AsyncConn.__init__)[0]
-        diff = set(kwargs) - set(valid_args)
-        assert len(diff) == 0, 'Invalid keyword argument(s): %s' % list(diff)
+		# Verify keyword arguments
+		valid_args = inspect.getargspec(async.AsyncConn.__init__)[0]
+		diff = set(kwargs) - set(valid_args)
+		assert len(diff) == 0, 'Invalid keyword argument(s): %s' % list(diff)
 
-        self.conn_kwargs = kwargs
-        assert isinstance(reconnect_interval, (int, float))
-        self.reconnect_interval = reconnect_interval
+		self.conn_kwargs = kwargs
+		assert isinstance(reconnect_interval, (int, float))
+		self.reconnect_interval = reconnect_interval
 
-        self.io_loop.add_callback(self._run)
+		self.io_loop.add_callback(self._run)
 
-    def _run(self):
-        logger.info('starting writer...')
-        self.connect()
+	def _run(self):
+		logger.info('starting writer...')
+		self.connect()
 
-    def pub(self, topic, msg, callback=None):
-        self._pub('pub', topic, msg, callback)
+	def pub(self, topic, msg, callback=None):
+		"""
+		Publish a single message.
 
-    def mpub(self, topic, msg, callback=None):
-        if isinstance(msg, str):
-            msg = [msg]
-        assert isinstance(msg, (list, set, tuple))
+		:param str topic: The topic to publish to.
 
-        self._pub('mpub', topic, msg, callback)
+		:param msg: Message payload. If this is not bytes, it is assumed to
+			be a UTF-8 encoded string.
 
-    def _pub(self, command, topic, msg, callback):
-        if not callback:
-            callback = functools.partial(self._finish_pub, command=command,
-                                         topic=topic, msg=msg)
+		:type msg: str, unicode, or bytes
 
-        if not self.conns:
-            callback(None, protocol.SendError('no connections'))
-            return
+		:param callable callback: Callback invoked on response or error.
+		"""
+		self._pub('pub', topic, msg, callback)
 
-        conn = random.choice(list(self.conns.values()))
-        conn.callback_queue.append(callback)
-        cmd = getattr(protocol, command)
-        try:
-            conn.send(cmd(topic, msg))
-        except Exception:
-            logger.exception('[%s] failed to send %s' % (conn.id, command))
-            conn.close()
+	def mpub(self, topic, msg, callback=None):
+		"""
+		Publish multiple messages in one network round trip.
 
-    def _on_connection_error(self, conn, error, **kwargs):
-        super(Writer, self)._on_connection_error(conn, error, **kwargs)
-        while conn.callback_queue:
-            callback = conn.callback_queue.pop(0)
-            callback(conn, error)
+		:param str topic: The topic to publish to.
 
-    def _on_connection_response(self, conn, data=None, **kwargs):
-        if conn.callback_queue:
-            callback = conn.callback_queue.pop(0)
-            callback(conn, data)
+		:param msg: Message payload. If this is not bytes or an iterable
+			of bytes, it is assumed to be a UTF-8 encoded string or an
+			iterable of UTF-8 encoded strings.
 
-    def connect(self):
-        for addr in self.nsqd_tcp_addresses:
-            host, port = addr.split(':')
-            self.connect_to_nsqd(host, int(port))
+		:type msg: str, unicode, or bytes
 
-    def connect_to_nsqd(self, host, port):
-        assert isinstance(host, str)
-        assert isinstance(port, int)
+		:param callable callback: Callback invoked on response or error.
+		"""
+		if isinstance(msg, compat.string_like):
+			msg = [msg]
+		assert isinstance(msg, (list, set, tuple))
 
-        conn = async.AsyncConn(host, port, **self.conn_kwargs)
-        conn.on('identify', self._on_connection_identify)
-        conn.on('identify_response', self._on_connection_identify_response)
-        conn.on('auth', self._on_connection_auth)
-        conn.on('auth_response', self._on_connection_auth_response)
-        conn.on('error', self._on_connection_error)
-        conn.on('response', self._on_connection_response)
-        conn.on('close', self._on_connection_close)
-        conn.on('ready', self._on_connection_ready)
-        conn.on('heartbeat', self.heartbeat)
+		self._pub('mpub', topic, msg, callback)
 
-        if conn.id in self.conns:
-            return
+	def _pub(self, command, topic, msg, callback):
+		if not callback:
+			callback = functools.partial(self._finish_pub, command=command,
+										 topic=topic, msg=msg)
 
-        logger.info('[%s] connecting to nsqd', conn.id)
-        conn.connect()
-        conn.callback_queue = []
+		if not self.conns:
+			callback(None, protocol.SendError('no connections'))
+			return
 
-    def _on_connection_ready(self, conn, **kwargs):
-        # re-check to make sure another connection didn't beat this one
-        if conn.id in self.conns:
-            logger.warning(
-                '[%s] connected but another matching connection already exists', conn.id)
-            conn.close()
-            return
-        self.conns[conn.id] = conn
+		conn = random.choice(list(self.conns.values()))
+		conn.callback_queue.append(callback)
+		cmd = getattr(protocol, command)
+		try:
+			conn.send(cmd(topic, msg))
+		except Exception:
+			logger.exception('[%s] failed to send %s' % (conn.id, command))
+			conn.close()
 
-    def _on_connection_close(self, conn, **kwargs):
-        if conn.id in self.conns:
-            del self.conns[conn.id]
+	def _on_connection_error(self, conn, error, **kwargs):
+		super(Writer, self)._on_connection_error(conn, error, **kwargs)
+		while conn.callback_queue:
+			callback = conn.callback_queue.pop(0)
+			callback(conn, error)
 
-        for callback in conn.callback_queue:
-            try:
-                callback(conn, protocol.ConnectionClosedError())
-            except Exception:
-                logger.exception('[%s] uncaught exception in callback', conn.id)
+	def _on_connection_response(self, conn, data=None, **kwargs):
+		if conn.callback_queue:
+			callback = conn.callback_queue.pop(0)
+			callback(conn, data)
 
-        logger.warning('[%s] connection closed', conn.id)
-        logger.info('[%s] attempting to reconnect in %0.2fs', conn.id, self.reconnect_interval)
-        reconnect_callback = functools.partial(self.connect_to_nsqd,
-                                               host=conn.host, port=conn.port)
-        self.io_loop.add_timeout(time.time() + self.reconnect_interval, reconnect_callback)
+	def connect(self):
+		for addr in self.nsqd_tcp_addresses:
+			host, port = addr.split(':')
+			self.connect_to_nsqd(host, int(port))
 
-    def _finish_pub(self, conn, data, command, topic, msg):
-        if isinstance(data, protocol.Error):
-            logger.error('[%s] failed to %s (%s, %s), data is %s',
-                         conn.id if conn else 'NA', command, topic, msg, data)
+	def connect_to_nsqd(self, host, port):
+		assert isinstance(host, compat.string_like)
+		assert isinstance(port, int)
+
+		conn = async.AsyncConn(host, port, **self.conn_kwargs)
+		conn.on('identify', self._on_connection_identify)
+		conn.on('identify_response', self._on_connection_identify_response)
+		conn.on('auth', self._on_connection_auth)
+		conn.on('auth_response', self._on_connection_auth_response)
+		conn.on('error', self._on_connection_error)
+		conn.on('response', self._on_connection_response)
+		conn.on('close', self._on_connection_close)
+		conn.on('ready', self._on_connection_ready)
+		conn.on('heartbeat', self.heartbeat)
+
+		if conn.id in self.conns:
+			return
+
+		logger.info('[%s] connecting to nsqd', conn.id)
+		conn.connect()
+		conn.callback_queue = []
+
+	def _on_connection_ready(self, conn, **kwargs):
+		# re-check to make sure another connection didn't beat this one
+		if conn.id in self.conns:
+			logger.warning(
+				'[%s] connected but another matching connection already exists', conn.id)
+			conn.close()
+			return
+		self.conns[conn.id] = conn
+
+	def _on_connection_close(self, conn, **kwargs):
+		if conn.id in self.conns:
+			del self.conns[conn.id]
+
+		for callback in conn.callback_queue:
+			try:
+				callback(conn, protocol.ConnectionClosedError())
+			except Exception:
+				logger.exception('[%s] uncaught exception in callback', conn.id)
+
+		logger.warning('[%s] connection closed', conn.id)
+		logger.info('[%s] attempting to reconnect in %0.2fs', conn.id, self.reconnect_interval)
+		reconnect_callback = functools.partial(self.connect_to_nsqd,
+											   host=conn.host, port=conn.port)
+		self.io_loop.add_timeout(time.time() + self.reconnect_interval, reconnect_callback)
+
+	def _finish_pub(self, conn, data, command, topic, msg):
+		if isinstance(data, protocol.Error):
+			logger.error('[%s] failed to %s (%s, %s), data is %s',
+						 conn.id if conn else 'NA', command, topic, msg, data)
